@@ -18,14 +18,19 @@ import json
 import sys
 import tornado.httpserver
 import tornado.ioloop
+from tornado.netutil import bind_unix_socket
 import tornado.options
 import tornado.web
 
 from time import time
 from tornado.options import define, options
 
-define("port", default=8888, help="run on the given port", type=int)
-define("worker_id", help="globally unique worker_id between 0 and 1023", type=int)
+define('address', group='webserver', default='', help='IP to bind')
+define("port", help="run on the given port", type=int)
+define('unix_socket', group='webserver', default=None,
+       help='Path to unix socket to bind')
+define("worker_id", type=int,
+       help="globally unique worker_id between 0 and 1023")
 
 
 class IDHandler(tornado.web.RequestHandler):
@@ -54,7 +59,7 @@ class IDHandler(tornado.web.RequestHandler):
         
         generated_id = ((curr_time - IDHandler.epoch) << 22) + (IDHandler.worker_id << 12) + IDHandler.sequence
         
-        self.set_header("Content-Type", "text/plain")
+        self.set_header("Content-Type", "application/json")
         self.write(str(generated_id))
         self.flush() # avoid ETag, etc generation 
         
@@ -82,7 +87,7 @@ class StatsHandler(tornado.web.RequestHandler):
             StatsHandler.errors = 0
             StatsHandler.flush_time = time()
         
-        self.set_header("Content-Type", "text/plain")
+        self.set_header("Content-Type", "application/json")
         self.write(json.dumps(stats))
 
 
@@ -90,11 +95,11 @@ def main():
     tornado.options.parse_command_line()
     
     if 'worker_id' not in options:
-        print 'missing --worker_id argument, see %s --help' % sys.argv[0] 
+        print('missing --worker_id argument, see %s --help' % sys.argv[0])
         sys.exit()
     
     if not 0 <= options.worker_id < 1024:
-        print 'invalid worker id, must be between 0 and 1023'
+        print('invalid worker id, must be between 0 and 1023')
         sys.exit()
         
     IDHandler.worker_id = options.worker_id
@@ -103,8 +108,13 @@ def main():
         (r"/", IDHandler),
         (r"/stats", StatsHandler),
     ], static_path="./static")
+
     http_server = tornado.httpserver.HTTPServer(application)
-    http_server.listen(options.port)
+
+    if options.unix_socket:
+        http_server.add_socket(bind_unix_socket(options.unix_socket, mode=0666))
+    else:
+        http_server.listen(options.port, options.address)
     tornado.ioloop.IOLoop.instance().start()
 
 
